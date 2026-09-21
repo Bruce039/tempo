@@ -1,5 +1,11 @@
 # Changelog
 
+## `tempo-contracts@1.12.0`
+
+### Minor Changes
+
+- Implemented TIP-1098 with a native T11 Zone verifier that validates AWS Nitro attestations and binds them to Zone batch inputs. The verifier remains fail-closed until the canonical T11 PCR measurements are finalized. (by @MatthiasSeitz, [#7797](https://github.com/tempoxyz/tempo/pull/7797))
+
 ## `tempo-contracts@1.11.0`
 
 ### Minor Changes
