@@ -180,6 +180,12 @@ impl AA2dPool {
         self.metrics.set_transaction_counts(total, pending, queued);
     }
 
+    /// Returns the base fee the eviction orders are currently keyed against.
+    #[cfg(test)]
+    pub(crate) const fn base_fee(&self) -> u64 {
+        self.base_fee
+    }
+
     pub(crate) fn set_base_fee(&mut self, base_fee: u64) {
         if self.base_fee == base_fee {
             return;
@@ -2388,7 +2394,9 @@ impl BestAA2dTransactions {
                     return Some(IncomingAA2dTransaction::Process(tx));
                 }
                 Err(broadcast::error::TryRecvError::Lagged(_)) => {
-                    // Buffer overflowed; self-corrects on next call.
+                    // The oldest notifications were dropped and are lost to this iterator, which
+                    // can then still yield a transaction they replaced, as it would for any
+                    // replacement that arrives after the iterator was created.
                 }
                 Err(_) => return None,
             }
