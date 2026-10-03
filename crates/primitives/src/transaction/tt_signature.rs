@@ -1215,7 +1215,7 @@ mod tests {
                     Some(SIGNATURE_TYPE_KEYCHAIN),
                 ),
                 (
-                    TempoSignature::Keychain(KeychainSignature::new(user, primitive.clone())),
+                    TempoSignature::Keychain(KeychainSignature::new(user, primitive)),
                     Some(SIGNATURE_TYPE_KEYCHAIN_V2),
                 ),
             ] {
