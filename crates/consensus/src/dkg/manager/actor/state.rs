@@ -385,6 +385,15 @@ where
             return Ok(None);
         }
 
+        // Startup replay can already hold our finalized log; dealing again would re-offer it.
+        if self
+            .logs_for_epoch(round.epoch)
+            .any(|(dealer, _)| *dealer == me.public_key())
+        {
+            info!("own dealer log already finalized for this round; not dealing again");
+            return Ok(None);
+        }
+
         let share = if round.is_full_dkg() {
             info!("running full DKG ceremony as dealer (new polynomial)");
             None

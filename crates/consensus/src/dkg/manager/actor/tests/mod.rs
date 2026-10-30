@@ -2262,3 +2262,50 @@ fn outcome_request_switches_notarized_ancestry_branches() {
         assert_eq!(harness.marshal.subscriptions(), subscriptions);
     });
 }
+
+#[test]
+fn restarted_dealer_does_not_offer_a_log_already_finalized_on_chain() {
+    Runner::default().start(|mut context| async move {
+        let (state, _, _) = dkg_state(&mut context, Epoch::new(1), 4, true);
+        let execution = StubExecutionProvider::default();
+        execution.add_header(outcome_header(Height::new(9), &state));
+
+        let mut harness = Harness::builder(context.child("first"), "dealer_restart_own_log")
+            .epoch_length(10)
+            .initial_state(state.clone())
+            .execution(execution.clone())
+            .build()
+            .await;
+        harness.start().await;
+        for height in 10..=15 {
+            harness
+                .report_finalized_header(header(Height::new(height)))
+                .await;
+        }
+        let log = harness
+            .mailbox()
+            .get_dealer_log(state.epoch)
+            .await
+            .unwrap()
+            .expect("dealer log after the midpoint");
+
+        let mut with_log = header(Height::new(16));
+        with_log.inner.extra_data = log.encode().into();
+        harness.report_finalized_header(with_log).await;
+        assert!(!harness.has_dealer_log(state.epoch).await);
+        harness.stop().await;
+        drop(harness);
+
+        let mut harness = Harness::builder(context.child("second"), "dealer_restart_own_log")
+            .epoch_length(10)
+            .finalized_floor(Height::new(16))
+            .execution(execution)
+            .build()
+            .await;
+        harness.start().await;
+        harness
+            .report_finalized_header(header(Height::new(17)))
+            .await;
+        assert!(!harness.has_dealer_log(state.epoch).await);
+    });
+}
