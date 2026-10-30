@@ -580,15 +580,19 @@ where
                     let hardfork = self.protocol_pool.validator().validator().active_hardfork();
 
                     let tx = Arc::new(tx);
-                    let added =
-                        self.aa_2d_pool
-                            .write()
-                            .add_transaction(tx, state_nonce, hardfork)?;
+                    // Checked under the same lock: a queued insert can evict the new transaction
+                    // too, and `Parked` doesn't report what was discarded.
+                    let (added, discarded_on_insert) = {
+                        let mut aa_2d_pool = self.aa_2d_pool.write();
+                        let added = aa_2d_pool.add_transaction(tx, state_nonce, hardfork)?;
+                        let discarded_on_insert = !aa_2d_pool.contains(added.hash());
+                        (added, discarded_on_insert)
+                    };
                     let hash = *added.hash();
+                    if discarded_on_insert {
+                        return Err(PoolError::new(hash, PoolErrorKind::DiscardedOnInsert));
+                    }
                     if let Some(pending) = added.as_pending() {
-                        if pending.discarded.iter().any(|tx| *tx.hash() == hash) {
-                            return Err(PoolError::new(hash, PoolErrorKind::DiscardedOnInsert));
-                        }
                         self.protocol_pool
                             .inner()
                             .on_new_pending_transaction(pending);
@@ -1478,7 +1482,8 @@ mod tests {
     use reth_provider::test_utils::{ExtendedAccount, MockEthProvider};
     use reth_storage_api::StateProviderFactory;
     use reth_transaction_pool::{
-        PoolConfig, TransactionOrigin, TransactionPool, TransactionValidationTaskExecutor,
+        PoolConfig, SubPoolLimit, TransactionOrigin, TransactionPool,
+        TransactionValidationTaskExecutor,
         blobstore::InMemoryBlobStore,
         validate::{EthTransactionValidatorBuilder, ValidTransaction},
     };
@@ -1682,6 +1687,63 @@ mod tests {
             },
         );
         provider
+    }
+
+    #[test]
+    fn queued_transaction_evicted_on_insert_is_discarded_on_insert() {
+        use crate::test_utils::TxBuilder;
+
+        let first = TxBuilder::aa(Address::random())
+            .nonce_key(U256::from(1))
+            .nonce(1000)
+            .build();
+        let second = TxBuilder::aa(Address::random())
+            .nonce_key(U256::from(2))
+            .nonce(1000)
+            .build();
+        let second_hash = *second.hash();
+
+        for queued_limit in [
+            SubPoolLimit {
+                max_txs: 1,
+                max_size: usize::MAX,
+            },
+            SubPoolLimit {
+                max_txs: usize::MAX,
+                max_size: reth_primitives_traits::InMemorySize::size(&first)
+                    .max(reth_primitives_traits::InMemorySize::size(&second)),
+            },
+        ] {
+            let pool = create_test_pool(create_provider_with_tip());
+            *pool.aa_2d_pool.write() = AA2dPool::new(crate::AA2dPoolConfig {
+                queued_limit,
+                ..Default::default()
+            });
+
+            let outcomes: Vec<_> = [first.clone(), second.clone()]
+                .into_iter()
+                .map(|tx| {
+                    pool.add_validated_transaction(
+                        TransactionOrigin::External,
+                        TransactionValidationOutcome::Valid {
+                            balance: *tx.cost(),
+                            state_nonce: 0,
+                            bytecode_hash: None,
+                            transaction: ValidTransaction::new(tx, None),
+                            propagate: true,
+                            authorities: None,
+                        },
+                    )
+                })
+                .collect();
+
+            assert!(outcomes[0].is_ok());
+            let err = outcomes[1].as_ref().unwrap_err();
+            assert_eq!(err.hash, second_hash);
+            assert!(matches!(err.kind, PoolErrorKind::DiscardedOnInsert));
+            assert!(pool.get(&second_hash).is_none());
+            assert!(pool.get(first.hash()).is_some());
+        }
     }
 
     #[test]
